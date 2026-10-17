@@ -38,7 +38,7 @@ module tb_nds_nitro_video_scanout;
     wire ce_pixel, de, hsync, vsync;
     wire [7:0] red, green, blue;
 
-    nds_nitro_video_scanout #(.FPS_WINDOW_FRAMES(2)) dut (.split_select(1'b0), .analog_screen_select(1'b0), .split_active(), .analog_screen_active(), .pf_slot(), .pf_ticket(), .split_frame_toggle(), .pf_completed(4'b0), .lb_acquire(), .lb_hold(), .lb_selected_slot(4'b0), .analog_ce(), .analog_de(), .analog_hs(), .analog_vs(), .analog_r(), .analog_g(), .analog_b(), .*);
+    nds_nitro_video_scanout #(.FPS_WINDOW_FRAMES(2)) dut (.split_select(1'b0), .analog_screen_select(1'b0), .split_active(), .analog_screen_active(), .pf_slot(), .pf_ticket(), .split_frame_toggle(), .pf_completed(4'b0), .lb_acquire(), .lb_hold(), .lb_selected_slot(4'b0), .analog_ce(), .analog_de(), .analog_hs(), .analog_vs(), .analog_r(), .analog_g(), .analog_b(), .lightpen_sensor(1'b0), .lightpen_button(1'b0), .lightpen_level(2'd0), .lightpen_state(), .touch_other(1'b0), .*);
 
     logic [1:0] scale_layout = 0;
     logic [1:0] scale_gap = 0;

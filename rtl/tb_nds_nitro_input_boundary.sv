@@ -98,7 +98,9 @@ module tb_nds_nitro_input_boundary;
         .firmware_sd_lba(), .firmware_sd_rd(), .firmware_sd_wr(),
         .firmware_sd_ack(1'b0), .firmware_sd_buff_din(),
         .analog_ce(), .analog_de(), .analog_hs(), .analog_vs(),
-        .analog_r(), .analog_g(), .analog_b()
+        .analog_r(), .analog_g(), .analog_b(),
+        .lightpen_sensor(1'b0), .lightpen_button(1'b0), .lightpen_level(2'd0),
+        .touch_other(1'b0)
     );
 
     task automatic clk1x_fall;

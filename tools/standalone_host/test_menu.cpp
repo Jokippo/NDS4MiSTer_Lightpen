@@ -3,7 +3,10 @@
 #include <cassert>
 #include <iostream>
 int main() {
-  assert(CORE_OPTIONS.size() == 8 && CORE_OPTION_MASK == 0xfbf0);
+  assert(CORE_OPTIONS.size() == 9 && CORE_OPTION_MASK == 0xfbf6);
+  assert(CORE_OPTIONS[8].shift == 1 && CORE_OPTIONS[8].width == 2 &&
+         std::string(CORE_OPTIONS[8].label) == "Light Pen Level");
+  assert(optionLabel(0, CORE_OPTIONS[8]) == " Light Pen Level:       High");
   for (unsigned original = 0; original < 65536; original++) {
     auto valid = cleanStatus(original);
     assert((valid & ~(CORE_OPTION_MASK | REQUIRED_STATUS)) == 0);

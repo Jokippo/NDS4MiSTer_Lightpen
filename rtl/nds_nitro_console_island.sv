@@ -36,6 +36,12 @@ module nds_nitro_console_island (
     output logic        video_crt_active,
     input  logic [31:0] joystick,
     input  logic [15:0] joystick_analog,
+    // Active-high user-port light pen and its brightness floor setting.
+    input  tri0         lightpen_sensor,
+    input  tri0         lightpen_button,
+    input  tri0 [1:0]   lightpen_level,
+    // clk_video pulse: mouse/right-stick touch used (shows the crosshair).
+    input  tri0         touch_other,
     input  logic        ioctl_download,
     input  logic [15:0] ioctl_index,
     input  logic [26:0] ioctl_addr,
@@ -535,7 +541,11 @@ nds_h3d_session_policy_latch h3d_policy_latch (
 // analog coordinates are held between reports, so a conventional two-stage
 // level synchronizer is the complete shell-to-console input boundary.
 (* async_reg = "true" *) logic [31:0] joystick_meta, joystick_sync;
-(* async_reg = "true" *) logic [15:0] analog_meta, analog_sync;
+(* async_reg = "true" *) logic [16:0] analog_meta, analog_sync;
+// While its button is held, the clk_video light pen owns the touch bit and
+// supplies native coordinates, flagged by analog bit 16. Pen state is held
+// for a frame between updates, like the analog levels it replaces.
+wire [17:0] lightpen_state;
 always_ff @(posedge clk1x or posedge console_reset_1x) begin
     if (console_reset_1x) begin
         joystick_meta <= '0;
@@ -543,9 +553,11 @@ always_ff @(posedge clk1x or posedge console_reset_1x) begin
         analog_meta <= '0;
         analog_sync <= '0;
     end else begin
-        joystick_meta <= joystick;
+        joystick_meta <= {joystick[31:13],
+            lightpen_state[17] ? lightpen_state[16] : joystick[12], joystick[11:0]};
         joystick_sync <= joystick_meta;
-        analog_meta <= joystick_analog;
+        analog_meta <= lightpen_state[17] ? {1'b1,lightpen_state[15:0]} :
+                                            {1'b0,joystick_analog};
         analog_sync <= analog_meta;
     end
 end
@@ -557,7 +569,7 @@ end
 // with a shared one-bit decode; the explicit tradeoff is that mouse X=1 also
 // displays/reports as X=0. Every other mouse pixel remains exact.
 wire [7:0] touch_x_raw = {~analog_sync[7],analog_sync[6:0]};
-wire [7:0] touch_x = {
+wire [7:0] touch_x = analog_sync[16] ? analog_sync[7:0] : {
     touch_x_raw[7:1],
     touch_x_raw[0] & (|touch_x_raw[7:1])
 };
@@ -565,7 +577,7 @@ wire [7:0] touch_y_unscaled = {~analog_sync[15],analog_sync[14:8]};
 wire [9:0] touch_y_scaled = {2'b00,touch_y_unscaled} +
                              {2'b00,touch_y_unscaled} +
                              {2'b00,touch_y_unscaled};
-wire [7:0] touch_y = touch_y_scaled[9:2];
+wire [7:0] touch_y = analog_sync[16] ? analog_sync[15:8] : touch_y_scaled[9:2];
 
 logic tgl_1x;
 logic tgl_mem;
@@ -1604,6 +1616,7 @@ nds_nitro_video_scanout scanout (
     .pf_slot, .pf_ticket, .split_frame_toggle, .pf_completed, .lb_acquire, .lb_hold, .lb_selected_slot,
     .analog_ce, .analog_de, .analog_hs, .analog_vs, .analog_r, .analog_g, .analog_b,
     .touch_pressed(joystick_sync[12]),.touch_x,.touch_y,
+    .lightpen_sensor,.lightpen_button,.lightpen_level,.lightpen_state,.touch_other,
     .layout_active(video_layout_active),
     .screen_order_active(video_screen_order_active),
     .gap_active(video_gap_active),.fps_active(video_fps_active),

@@ -103,6 +103,15 @@ module nds_nitro_video_scanout #(
     input  logic        touch_pressed,
     input  logic [7:0]  touch_x,
     input  logic [7:0]  touch_y,
+    // Active-high user-port light pen: sensor pulse, contact button and the
+    // contact brightness floor (0=High, 1=Off, 2=Low, 3=Medium).
+    input  tri0         lightpen_sensor,
+    input  tri0         lightpen_button,
+    input  tri0 [1:0]   lightpen_level,
+    // One-clock pulse when the mouse or right stick touch input is used.
+    input  tri0         touch_other,
+    // {button held, pen down, native Y, native X}, clk_video domain.
+    output logic [17:0] lightpen_state,
     output logic [1:0]  layout_active,
     output logic        screen_order_active,
     output logic [1:0]  gap_active,
@@ -472,12 +481,124 @@ module nds_nitro_video_scanout #(
         {analog_context,analog_x[7:1]} :
         {split_active ? 1'b0 : local_y[0],local_screen,local_x[7:1]};
 
+    // Light pen. The CRT is fed by the analog raster in split mode and by
+    // the digital raster otherwise; only that raster's touch panel is used.
+    // A qualified sensor pulse latches the beam position:
+    //  - the sensor must stay active for 15 clocks (250 ns), rejecting
+    //    deflection/crosstalk spikes;
+    //  - only the first qualified pulse of a frame counts (the top of the
+    //    pen's spot), so later lines and stray pulses cannot move it;
+    //  - the button is sampled once per frame (debounce), and captures start
+    //    one full lit frame after a press. A raw release stops them at once.
+    wire digital_touch_pixel = screen_pixel && (!external_enable || local_screen);
+    wire lp_touch_pixel = split_active ? analog_pixel && analog_screen_active :
+                                         digital_touch_pixel;
+    wire digital_frame_tick = pixel_divider == pixel_divider_limit &&
+                              hcount == horizontal_total-1 && frame_end;
+    wire analog_frame_tick = analog_divider == 9 && analog_hcount == 383 &&
+                             analog_vcount == 261;
+    wire lp_tick = split_active ? analog_frame_tick : digital_frame_tick;
+    // Measured on a 15 kHz CRT (10-clock dots): the pulse arrives LP_X_LAG
+    // dots after the beam passed the pen, and the top of the pen's spot is
+    // LP_Y_LEAD rows above its centre. The capture window is measured from
+    // the touch panel origin with both folded in, so it extends LP_X_LAG
+    // dots past the right edge and the whole panel stays reachable.
+    localparam integer LP_X_LAG = 7;
+    localparam integer LP_Y_LEAD = 2;
+    // Small moves are averaged with the previous position (and +-1 is
+    // ignored); larger jumps or a new press take effect at once.
+    localparam integer LP_JUMP = 8;
+    wire touch_second_h = layout_active == LAYOUT_SIDE && !screen_order_active;
+    wire touch_second_v = layout_active == LAYOUT_STACK && !screen_order_active;
+    wire digital_touch_shown = layout_active == LAYOUT_SIDE ||
+        layout_active == LAYOUT_STACK ||
+        (layout_active == LAYOUT_RIGHT ? second_screen : first_screen);
+    wire [10:0] lp_h = split_active ? {2'b0,analog_hcount} : {1'b0,hcount};
+    wire [10:0] lp_v = split_active ? {2'b0,analog_vcount} : {1'b0,vcount};
+    wire [10:0] lp_h0 = (split_active ? 11'd32 :
+        touch_second_h ? {1'b0,second_x} : {1'b0,screen_left}) + LP_X_LAG;
+    wire [10:0] lp_v0 = split_active ? 11'd24 :
+        touch_second_v ? {1'b0,second_y} : {1'b0,screen_top};
+    wire [10:0] lp_cx = lp_h - lp_h0;   // corrected X, valid 0..255
+    wire [10:0] lp_ry = lp_v - lp_v0;   // panel row, valid 0..191
+    wire lp_window = (split_active ? analog_screen_active : digital_touch_shown) &&
+                     lp_cx[10:8] == 0 && lp_ry[10:8] == 0 && lp_ry[7:6] != 2'b11;
+    wire [7:0] lp_cy = lp_ry[7:0] >= 192 - LP_Y_LEAD ? 8'd191 :
+                                                     lp_ry[7:0] + LP_Y_LEAD;
+    (* async_reg = "true" *) logic [1:0] lp_sensor_sync, lp_button_sync;
+    logic [3:0] lp_hits;
+    logic lp_button, lp_armed, lp_taken, lp_down, lp_owner;
+    logic [15:0] lp_xy;
+    wire lp_hit = lp_sensor_sync[1] && lp_hits == 4'd14;
+    wire signed [8:0] lp_ddx = $signed({1'b0,lp_cx[7:0]}) - $signed({1'b0,lp_xy[7:0]});
+    wire signed [8:0] lp_half = (lp_ddx + $signed({8'd0,lp_ddx[8]})) >>> 1;
+    wire lp_far = lp_ddx > LP_JUMP || lp_ddx < -LP_JUMP;
+    wire [7:0] lp_sx = !lp_down || lp_far ? lp_cx[7:0] : lp_xy[7:0] + lp_half[7:0];
+    assign lightpen_state = {lp_button, lp_down, lp_xy};
+    always_ff @(posedge clk_video or posedge reset) begin
+        if (reset) begin
+            lp_sensor_sync <= 0; lp_button_sync <= 0; lp_hits <= 0;
+            lp_button <= 0; lp_armed <= 0; lp_taken <= 0; lp_down <= 0; lp_xy <= 0;
+            lp_owner <= 0;
+        end else begin
+            lp_sensor_sync <= {lp_sensor_sync[0], lightpen_sensor};
+            lp_button_sync <= {lp_button_sync[0], lightpen_button};
+            lp_hits <= lp_sensor_sync[1] ? lp_hits + {3'd0, ~&lp_hits} : 4'd0;
+            // The pen owns the touch pointer from its press until the mouse
+            // or right stick is used again; the crosshair is hidden meanwhile.
+            if (lp_button) lp_owner <= 1;
+            else if (touch_other) lp_owner <= 0;
+            if (!lp_button_sync[1]) lp_armed <= 0;
+            if (lp_tick) begin
+                lp_button <= lp_button_sync[1];
+                lp_armed <= lp_button && lp_button_sync[1];
+                lp_taken <= 0;
+                // Releasing lifts the pen, so a new press waits for a pulse.
+                if (!lp_button_sync[1]) lp_down <= 0;
+            end else if (lp_armed && !lp_taken && lp_hit && lp_window) begin
+                lp_taken <= 1;
+                lp_down <= 1;
+                lp_xy <= {lp_cy, lp_sx};
+            end
+        end
+    end
+    // While the button is held, raise the touch panel's darkest pixels to a
+    // grey floor so the sensor sees the beam. One shared clamp serves the
+    // CRT raster; the other raster keeps its unmodified pixels.
+    logic [5:0] lp_floor;
+    always_comb case (lightpen_level)
+        2'd0: lp_floor = 6'd46;     // High
+        2'd1: lp_floor = 6'd0;      // Off
+        2'd2: lp_floor = 6'd26;     // Low
+        default: lp_floor = 6'd36;  // Medium
+    endcase
+    // The floor is decided one clock ahead: every dot lasts at least three
+    // clocks, so the registered value still belongs to the dot being output
+    // and the pixel path stays short.
+    logic [5:0] lp_lift;
+    always_ff @(posedge clk_video or posedge reset) begin
+        if (reset) lp_lift <= 0;
+        else lp_lift <= lp_button && lp_touch_pixel ? lp_floor : 6'd0;
+    end
+    function automatic logic [5:0] lp_max(input logic [5:0] c, input logic [5:0] f);
+        lp_max = c < f ? f : c;
+    endfunction
+    function automatic logic [23:0] rgb666(input logic [17:0] p);
+        rgb666 = {p[17:12],p[17:16],p[11:6],p[11:10],p[5:0],p[5:4]};
+    endfunction
+    wire [17:0] digital_pix = lb_half ? scan_pair[35:18] : scan_pair[17:0];
+    wire [17:0] lp_src = !split_active ? digital_pix :
+                         analog_x[0] ? analog_pair[35:18] : analog_pair[17:0];
+    wire [17:0] lp_pix = {lp_max(lp_src[17:12],lp_lift),
+                          lp_max(lp_src[11:6],lp_lift),
+                          lp_max(lp_src[5:0],lp_lift)};
+
     wire analog_pointer_white, analog_pointer_red, analog_pointer_outline;
     nds_nitro_touch_pointer analog_pointer (
         .clk(clk_video), .reset(reset),
-        .frame_boundary(analog_divider == 9 && analog_hcount == 383 && analog_vcount == 261),
+        .frame_boundary(analog_frame_tick),
         .touch_pressed, .touch_x, .touch_y,
-        .pixel_valid(analog_pixel && analog_screen_active),
+        .pixel_valid(analog_pixel && analog_screen_active && !lp_owner),
         .pixel_x(analog_x), .pixel_y(analog_y), .pointer_visible(),
         .pointer_white_pixel(analog_pointer_white),
         .pointer_red_pixel(analog_pointer_red),
@@ -532,15 +653,14 @@ module nds_nitro_video_scanout #(
                 if (session_reset || (analog_pixel && (!analog_valid ||
                     !(active_screen_external[analog_screen_active] ?
                     (external_enable && active_external_valid) : normal_frame_valid)))) begin
-                    analog_r <= 0; analog_g <= 0; analog_b <= 0;
+                    // Late/invalid lines stay black, or floor grey for the pen.
+                    {analog_b,analog_g,analog_r} <= rgb666({3{lp_lift}});
                 end else if (analog_fps_pixel || analog_pointer_white) begin
                     analog_r <= 255; analog_g <= 255; analog_b <= 255;
                 end else if (analog_pointer_red) begin
                     analog_r <= 255; analog_g <= 0; analog_b <= 0;
                 end else if (analog_pixel && !analog_pointer_outline) begin
-                    {analog_b,analog_g,analog_r} <= analog_x[0] ?
-                        {analog_pair[35:30],analog_pair[35:34],analog_pair[29:24],analog_pair[29:28],analog_pair[23:18],analog_pair[23:22]} :
-                        {analog_pair[17:12],analog_pair[17:16],analog_pair[11:6],analog_pair[11:10],analog_pair[5:0],analog_pair[5:4]};
+                    {analog_b,analog_g,analog_r} <= rgb666(lp_pix);
                 end else begin
                     analog_r <= 0; analog_g <= 0; analog_b <= 0;
                 end
@@ -560,12 +680,11 @@ module nds_nitro_video_scanout #(
     nds_nitro_touch_pointer touch_pointer (
         .clk(clk_video),
         .reset(reset),
-        .frame_boundary(pixel_divider == pixel_divider_limit &&
-                        hcount == horizontal_total-1 && frame_end),
+        .frame_boundary(digital_frame_tick),
         .touch_pressed,
         .touch_x,
         .touch_y,
-        .pixel_valid(screen_pixel && (!external_enable || local_screen == 1'b1)),
+        .pixel_valid(digital_touch_pixel && !lp_owner),
         .pixel_x(local_x),
         .pixel_y(local_y),
         .pointer_visible,
@@ -731,7 +850,7 @@ module nds_nitro_video_scanout #(
                     (screen_pixel && (!scan_valid || !(active_screen_external[local_screen] ?
                         (external_enable && active_external_valid) :
                         normal_frame_valid)))) begin
-                    red <= 0; green <= 0; blue <= 0;
+                    {blue, green, red} <= rgb666(split_active ? 18'd0 : {3{lp_lift}});
                 end else if (fps_font_pixel) begin
                     red <= 8'hff; green <= 8'hff; blue <= 8'hff;
                 end else if (pointer_red_pixel) begin
@@ -741,11 +860,7 @@ module nds_nitro_video_scanout #(
                 end else if (pointer_outline_pixel) begin
                     red <= 8'h00; green <= 8'h00; blue <= 8'h00;
                 end else if (screen_pixel) begin
-                    {blue, green, red} <= lb_half
-                        ? {scan_pair[35:30],scan_pair[35:34],scan_pair[29:24],scan_pair[29:28],
-                           scan_pair[23:18],scan_pair[23:22]}
-                        : {scan_pair[17:12],scan_pair[17:16],scan_pair[11:6],scan_pair[11:10],
-                           scan_pair[5:0],scan_pair[5:4]};
+                    {blue, green, red} <= rgb666(split_active ? digital_pix : lp_pix);
                 end else begin
                     red <= 0; green <= 0; blue <= 0;
                 end

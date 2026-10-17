@@ -339,18 +339,19 @@ class Host {
                        RESET_CURSOR = 10, EXIT_CURSOR = 11,
                        SPLIT_CURSOR = 12, ANALOG_CURSOR = 13, DV_TARGET_CURSOR = 14,
                        DISPLAY_CURSOR = 15, TOUCH_RANGE_CURSOR = 16,
-                       LAST_MAIN_CURSOR = TOUCH_RANGE_CURSOR;
+                       LIGHTPEN_CURSOR = 17, LAST_MAIN_CURSOR = LIGHTPEN_CURSOR;
   int mainMenuRow(int item) const {
     // Stable option identities keep status bits and saved settings unchanged.
     // Only the visible rows differ between the main and Display options pages.
     static constexpr std::array<int, LAST_MAIN_CURSOR + 1> standard{
-        0, 1, 3, 4, 5, 6, 7, 8, 9, 12, 13, 15, 10, 11, -1, -1, 2};
+        0, 1, 3, 4, 5, 6, 7, 8, 9, 12, 13, 15, 10, 11, -1, -1, 2, -1};
     static constexpr std::array<int, LAST_MAIN_CURSOR + 1> crt{
-        0, 1, 9, 3, 4, 5, 6, 7, 8, 12, 13, 15, 10, 11, -1, -1, 2};
+        0, 1, 9, 3, 4, 5, 6, 7, 8, 12, 13, 15, 10, 11, -1, -1, 2, -1};
     static constexpr std::array<int, LAST_MAIN_CURSOR + 1> independent{
-        0, 1, 3, -1, -1, -1, -1, -1, -1, 8, 10, 15, -1, 4, -1, 5, 7};
+        0, 1, 3, -1, -1, -1, -1, -1, -1, 8, 10, 15, -1, 4, -1, 5, 7, -1};
+    // Light Pen Level shares the Display options page, above the DV target.
     static constexpr std::array<int, LAST_MAIN_CURSOR + 1> display{
-        -1, -1, -1, 1, 2, 3, 4, 5, -1, -1, -1, 15, -1, -1, 7, -1, -1};
+        -1, -1, -1, 1, 2, 3, 4, 5, -1, -1, -1, 15, -1, -1, 7, -1, -1, 6};
     if (item < 0 || item > LAST_MAIN_CURSOR) return -1;
     if (item == DV_TARGET_CURSOR && !(video_flags & (1u << 10))) return -1;
     if (independent_outputs_supported) {
@@ -360,7 +361,8 @@ class Host {
     return ((status & CRT_TIMING) && !(status & INDEPENDENT_OUTPUTS) ? crt : standard)[item];
   }
   static int optionCursor(size_t option) {
-    return option < 6 ? int(option) + 2 + (option >= 2) : int(option) + 6;
+    return option == 8 ? LIGHTPEN_CURSOR :
+           option < 6 ? int(option) + 2 + (option >= 2) : int(option) + 6;
   }
 
   int nextMainMenuItem(int direction) const {
@@ -1858,8 +1860,10 @@ class Host {
         touch_rotation = TouchRotation((unsigned(touch_rotation) + (a == 7 ? 2 : 1)) % 3);
         message.clear();
       } else if ((a == 2 || a == 7 || a == 8) && ((cursor >= 2 && cursor < LID_CURSOR) ||
-                 cursor == SPLIT_CURSOR || cursor == ANALOG_CURSOR)) {
-        const auto &o = CORE_OPTIONS[cursor >= SPLIT_CURSOR ? cursor - 6 :
+                 cursor == SPLIT_CURSOR || cursor == ANALOG_CURSOR ||
+                 cursor == LIGHTPEN_CURSOR)) {
+        const auto &o = CORE_OPTIONS[cursor == LIGHTPEN_CURSOR ? 8 :
+                                    cursor >= SPLIT_CURSOR ? cursor - 6 :
                                     cursor - 2 - (cursor > TOUCH_ROTATION_CURSOR)];
         if (independent_outputs_supported &&
             (o.shift == 13 || o.shift == 14 ||

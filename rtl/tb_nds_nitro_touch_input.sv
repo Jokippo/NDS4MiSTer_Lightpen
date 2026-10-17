@@ -18,7 +18,7 @@ module tb_nds_nitro_touch_input;
     integer current_x;
     integer current_y;
 
-    nds_nitro_touch_input dut (.*);
+    nds_nitro_touch_input dut (.touch_event(), .*);
 
     function automatic integer native_x(input logic [7:0] axis);
         native_x = {~axis[7],axis[6:0]};

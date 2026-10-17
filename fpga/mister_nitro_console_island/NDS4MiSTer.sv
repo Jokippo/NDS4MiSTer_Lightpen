@@ -40,6 +40,8 @@ module emu
         "O[13],Output Timing,Standard,CRT 240p;",
         "O[14],Independent Outputs,Off,On;",
         "O[15],Analog Screen,Main,Touch;",
+        // Light pen contact brightness floor. Zero is the reliable default.
+        "O[2:1],Light Pen Level,High,Off,Low,Medium;",
         "T[0],Reset;",
         "J1,A,B,X,Y,L,R,Select,Start,Touch;",
         "v,1;",
@@ -165,7 +167,7 @@ module emu
     // one-shot img_mounted state held by the save bridge.
     wire media_reset=RESET|~shell_pll_locked;
     wire core_reset=media_reset|status[0]|buttons[1];
-    wire touch_pressed;
+    wire touch_pressed, touch_event;
     // TATE targets a physically rotated monitor: retain native DS controls.
     wire [15:0] touch_analog;
     wire [31:0] joystick_touch = {
@@ -175,7 +177,7 @@ module emu
         .clk(clk_sys),.reset(core_reset),
         .controller_pressed(joystick_0[12]),
         .controller_analog(touch_analog_0),.ps2_mouse,
-        .touch_pressed,.touch_analog
+        .touch_pressed,.touch_analog,.touch_event
     );
     // The Nitro console is the only execution path in this core. It is always
     // enabled, so the OSD no longer exposes a misleading on/off switch.
@@ -216,6 +218,10 @@ module emu
         .video_layout_active,.video_screen_order_active,
         .video_gap_active,.video_fps_active,
         .joystick(joystick_touch),.joystick_analog(touch_analog),
+        // Active-low OPL811-OC light pen on USER_IN[0], contact button on
+        // USER_IN[1]. USER_OUT stays all-ones so both lines are inputs.
+        .lightpen_sensor(~USER_IN[0]),.lightpen_button(~USER_IN[1]),
+        .lightpen_level(status[2:1]),.touch_other(touch_event),
         .ioctl_download,.ioctl_index,.ioctl_addr,.ioctl_dout,.ioctl_wr,.ioctl_wait,
         .firmware_io_enable(firmware_ext_bus[34]),.firmware_io_strobe(firmware_ext_bus[33]),
         .firmware_io_din(firmware_ext_bus[31:16]),

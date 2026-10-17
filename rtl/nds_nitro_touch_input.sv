@@ -11,7 +11,9 @@ module nds_nitro_touch_input (
     input  logic [15:0] controller_analog,
     input  logic [24:0] ps2_mouse,
     output logic        touch_pressed,
-    output logic [15:0] touch_analog
+    output logic [15:0] touch_analog,
+    // One-clock pulse whenever the mouse or right stick reports activity.
+    output logic        touch_event
 );
     logic mouse_toggle_d;
     logic controller_pressed_d;
@@ -77,5 +79,6 @@ module nds_nitro_touch_input (
         ~mouse_x_unsigned[7],mouse_x_unsigned[6:0]
     };
     assign touch_analog = use_mouse ? mouse_analog : controller_analog;
+    assign touch_event = mouse_event || controller_event;
     assign touch_pressed = use_mouse ? ps2_mouse[0] : controller_pressed;
 endmodule
